@@ -61,7 +61,7 @@ def get_hf_features_from_features(features: dict) -> datasets.Features:
                 if key == LANGUAGE_PERSISTENT
                 else language_events_column_feature()
             )
-        elif ft["dtype"] == "video":
+        elif ft["dtype"] in ("video", "depth"):
             continue
         elif ft["dtype"] == "image":
             hf_features[key] = datasets.Image()
@@ -292,6 +292,8 @@ def validate_feature_dtype_and_shape(
         return validate_feature_numpy_array(name, expected_dtype, expected_shape, value)
     elif expected_dtype in ["image", "video"]:
         return validate_feature_image_or_video(name, expected_shape, value)
+    elif expected_dtype == "depth":
+        return validate_feature_depth(name, expected_shape, value)
     elif expected_dtype == "string":
         return validate_feature_string(name, value)
     elif expected_dtype == "language":
@@ -357,6 +359,23 @@ def validate_feature_image_or_video(
     else:
         error_message += f"The feature '{name}' is expected to be of type 'PIL.Image' or 'np.ndarray' channel first or channel last, but type '{type(value)}' provided instead.\n"
 
+    return error_message
+
+
+def validate_feature_depth(name: str, expected_shape: list[int], value: np.ndarray | PILImage.Image) -> str:
+    """Validate a depth map feature (2D uint16/float array)."""
+    error_message = ""
+    if isinstance(value, np.ndarray):
+        h, w = expected_shape
+        actual_shape = value.shape
+        if actual_shape not in ((h, w), (h, w, 1)):
+            error_message += (
+                f"The feature '{name}' of shape '{actual_shape}' does not have the expected shape '{(h, w)}'.\n"
+            )
+    else:
+        error_message += (
+            f"The feature '{name}' is expected to be a 'np.ndarray', but type '{type(value)}' was provided.\n"
+        )
     return error_message
 
 
