@@ -40,7 +40,7 @@ from .feature_utils import (
     validate_episode_buffer,
     validate_frame,
 )
-from .image_writer import AsyncImageWriter, write_image
+from .image_writer import AsyncImageWriter, write_depth_image, write_image
 from .io_utils import (
     embed_images,
     get_file_size_in_mb,
@@ -48,6 +48,8 @@ from .io_utils import (
     write_info,
 )
 from .utils import (
+    DEFAULT_DEPTH_IMAGE_PATH,
+    DEFAULT_DEPTH_PATH,
     DEFAULT_EPISODES_PATH,
     DEFAULT_IMAGE_PATH,
     update_chunk_file_indices,
@@ -69,9 +71,13 @@ def _encode_video_worker(
     fps: int,
     camera_encoder: VideoEncoderConfig | None = None,
     encoder_threads: int | None = None,
+    image_path_template: str = DEFAULT_IMAGE_PATH,
 ) -> Path:
     temp_path = Path(tempfile.mkdtemp(dir=root)) / f"{video_key}_{episode_index:03d}.mp4"
-    fpath = DEFAULT_IMAGE_PATH.format(image_key=video_key, episode_index=episode_index, frame_index=0)
+    key_name = "depth_key" if image_path_template == DEFAULT_DEPTH_IMAGE_PATH else "image_key"
+    fpath = image_path_template.format(
+        **{key_name: video_key, "episode_index": episode_index, "frame_index": 0}
+    )
     img_dir = (root / fpath).parent
     encode_video_frames(
         img_dir,
@@ -208,6 +214,14 @@ class DatasetWriter:
             if self._meta.features[key]["dtype"] == "video" and self._streaming_encoder is not None:
                 self._streaming_encoder.feed_frame(key, frame[key])
                 self.episode_buffer[key].append(None)
+            elif self._meta.features[key]["dtype"] == "depth":
+                img_path = self._get_depth_file_path(
+                    episode_index=self.episode_buffer["episode_index"], depth_key=key, frame_index=frame_index
+                )
+                if frame_index == 0:
+                    img_path.parent.mkdir(parents=True, exist_ok=True)
+                self._save_depth_image(frame[key], img_path)
+                self.episode_buffer[key].append(str(img_path))
             elif self._meta.features[key]["dtype"] in ["image", "video"]:
                 img_path = self._get_image_file_path(
                     episode_index=self.episode_buffer["episode_index"], image_key=key, frame_index=frame_index
@@ -248,7 +262,7 @@ class DatasetWriter:
         episode_buffer["task_index"] = np.array([self._meta.get_task_index(task) for task in tasks])
 
         for key, ft in self._meta.features.items():
-            if key in ["index", "episode_index", "task_index"] or ft["dtype"] in ["image", "video"]:
+            if key in ["index", "episode_index", "task_index"] or ft["dtype"] in ["image", "video", "depth"]:
                 continue
             stacked_values = np.stack(episode_buffer[key])
 
@@ -263,6 +277,7 @@ class DatasetWriter:
         self._wait_image_writer()
 
         has_video_keys = len(self._meta.video_keys) > 0
+        has_depth_keys = len(self._meta.depth_keys) > 0
         use_streaming = self._streaming_encoder is not None and has_video_keys
         use_batched_encoding = self._batch_encoding_size > 1
 
@@ -270,9 +285,11 @@ class DatasetWriter:
             non_video_buffer = {
                 k: v
                 for k, v in episode_buffer.items()
-                if self._meta.features.get(k, {}).get("dtype") not in ("video",)
+                if self._meta.features.get(k, {}).get("dtype") not in ("video", "depth")
             }
-            non_video_features = {k: v for k, v in self._meta.features.items() if v["dtype"] != "video"}
+            non_video_features = {
+                k: v for k, v in self._meta.features.items() if v["dtype"] not in ("video", "depth")
+            }
             ep_stats = compute_episode_stats(non_video_buffer, non_video_features)
         else:
             ep_stats = compute_episode_stats(episode_buffer, self._meta.features)
@@ -325,6 +342,10 @@ class DatasetWriter:
                 for video_key in self._meta.video_keys:
                     ep_metadata.update(self._save_episode_video(video_key, episode_index))
 
+        if has_depth_keys and not use_batched_encoding:
+            for depth_key in self._meta.depth_keys:
+                ep_metadata.update(self._save_episode_depth(depth_key, episode_index))
+
         # `meta.save_episode` need to be executed after encoding the videos
         self._meta.save_episode(episode_index, episode_length, episode_tasks, ep_stats, ep_metadata)
 
@@ -337,7 +358,9 @@ class DatasetWriter:
                 self._episodes_since_last_encoding = 0
 
         if episode_data is None:
-            self.clear_episode_buffer(delete_images=len(self._meta.image_keys) > 0)
+            self.clear_episode_buffer(
+                delete_images=len(self._meta.image_keys) > 0 or len(self._meta.depth_keys) > 0
+            )
 
     def _batch_save_episode_video(self, start_episode: int, end_episode: int | None = None) -> None:
         """Batch save videos for multiple episodes."""
@@ -546,6 +569,10 @@ class DatasetWriter:
                 img_dir = self._get_image_file_dir(episode_index, cam_key)
                 if img_dir.is_dir():
                     shutil.rmtree(img_dir)
+            for depth_key in self._meta.depth_keys:
+                depth_dir = self._get_depth_file_path(episode_index, depth_key, frame_index=0).parent
+                if depth_dir.is_dir():
+                    shutil.rmtree(depth_dir)
 
         self.episode_buffer = self._create_episode_buffer()
 
@@ -587,6 +614,104 @@ class DatasetWriter:
             self._camera_encoder,
             self._encoder_threads,
         )
+
+    def _get_depth_file_path(self, episode_index: int, depth_key: str, frame_index: int) -> Path:
+        fpath = DEFAULT_DEPTH_IMAGE_PATH.format(
+            depth_key=depth_key, episode_index=episode_index, frame_index=frame_index
+        )
+        return self._root / fpath
+
+    def _save_depth_image(self, image: torch.Tensor | np.ndarray, fpath: Path) -> None:
+        if self.image_writer is None:
+            if isinstance(image, torch.Tensor):
+                image = image.cpu().numpy()
+            write_depth_image(image, fpath, compress_level=1)
+        else:
+            if isinstance(image, torch.Tensor):
+                image = image.cpu().numpy()
+            from lerobot.utils.depth_recording import depth_to_rgb_uint8
+            self.image_writer.save_image(image=depth_to_rgb_uint8(image), fpath=fpath, compress_level=1)
+
+    def _encode_temporary_episode_depth(self, depth_key: str, episode_index: int) -> Path:
+        """Use ffmpeg to convert staged depth PNGs into mp4 videos under ``depth/``."""
+        return _encode_video_worker(
+            depth_key,
+            episode_index,
+            self._root,
+            self._meta.fps,
+            self._camera_encoder,
+            self._encoder_threads,
+            image_path_template=DEFAULT_DEPTH_IMAGE_PATH,
+        )
+
+    def _save_episode_depth(
+        self,
+        depth_key: str,
+        episode_index: int,
+        temp_path: Path | None = None,
+    ) -> dict:
+        if self._meta.depth_path is None:
+            raise ValueError("depth_path is not set in dataset info but depth features are present.")
+
+        if temp_path is None:
+            ep_path = self._encode_temporary_episode_depth(depth_key, episode_index)
+        else:
+            ep_path = temp_path
+
+        ep_size_in_mb = get_file_size_in_mb(ep_path)
+        ep_duration_in_s = get_video_duration_in_s(ep_path)
+
+        meta_prefix = f"depth/{depth_key}"
+        if (
+            episode_index == 0
+            or self._meta.latest_episode is None
+            or f"{meta_prefix}/chunk_index" not in self._meta.latest_episode
+        ):
+            chunk_idx, file_idx = 0, 0
+            if self._meta.episodes is not None and len(self._meta.episodes) > 0:
+                old_chunk_idx = self._meta.episodes[-1][f"{meta_prefix}/chunk_index"]
+                old_file_idx = self._meta.episodes[-1][f"{meta_prefix}/file_index"]
+                chunk_idx, file_idx = update_chunk_file_indices(
+                    old_chunk_idx, old_file_idx, self._meta.chunks_size
+                )
+            latest_duration_in_s = 0.0
+            new_path = self._root / self._meta.depth_path.format(
+                depth_key=depth_key, chunk_index=chunk_idx, file_index=file_idx
+            )
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(ep_path), str(new_path))
+        else:
+            latest_ep = self._meta.latest_episode
+            chunk_idx = latest_ep[f"{meta_prefix}/chunk_index"][0]
+            file_idx = latest_ep[f"{meta_prefix}/file_index"][0]
+
+            latest_path = self._root / self._meta.depth_path.format(
+                depth_key=depth_key, chunk_index=chunk_idx, file_index=file_idx
+            )
+            latest_size_in_mb = get_file_size_in_mb(latest_path)
+            latest_duration_in_s = latest_ep[f"{meta_prefix}/to_timestamp"][0]
+
+            if latest_size_in_mb + ep_size_in_mb >= self._meta.video_files_size_in_mb:
+                chunk_idx, file_idx = update_chunk_file_indices(chunk_idx, file_idx, self._meta.chunks_size)
+                new_path = self._root / self._meta.depth_path.format(
+                    depth_key=depth_key, chunk_index=chunk_idx, file_index=file_idx
+                )
+                new_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(ep_path), str(new_path))
+                latest_duration_in_s = 0.0
+            else:
+                concatenate_video_files([latest_path, ep_path], latest_path)
+
+        shutil.rmtree(str(ep_path.parent))
+
+        metadata = {
+            "episode_index": episode_index,
+            f"{meta_prefix}/chunk_index": chunk_idx,
+            f"{meta_prefix}/file_index": file_idx,
+            f"{meta_prefix}/from_timestamp": latest_duration_in_s,
+            f"{meta_prefix}/to_timestamp": latest_duration_in_s + ep_duration_in_s,
+        }
+        return metadata
 
     def close_writer(self) -> None:
         """Close and cleanup the parquet writer if it exists."""

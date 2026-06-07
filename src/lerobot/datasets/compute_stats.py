@@ -515,7 +515,7 @@ def compute_episode_stats(
         if features[key]["dtype"] in {"string", "language"}:
             continue
 
-        if features[key]["dtype"] in ["image", "video"]:
+        if features[key]["dtype"] in ["image", "video", "depth"]:
             ep_ft_array = sample_images(data)
             axes_to_reduce = (0, 2, 3)
             keepdims = True
@@ -528,7 +528,7 @@ def compute_episode_stats(
             ep_ft_array, axis=axes_to_reduce, keepdims=keepdims, quantile_list=quantile_list
         )
 
-        if features[key]["dtype"] in ["image", "video"]:
+        if features[key]["dtype"] in ["image", "video", "depth"]:
             ep_stats[key] = {
                 k: v if k == "count" else np.squeeze(v / 255.0, axis=0) for k, v in ep_stats[key].items()
             }

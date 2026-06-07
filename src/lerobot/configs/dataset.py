@@ -69,6 +69,9 @@ class DatasetRecordConfig:
     # Number of threads per encoder instance. None = auto (codec default).
     # Lower values reduce CPU usage, maps to 'lp' (via svtav1-params) for libsvtav1 and 'threads' for h264/hevc..
     encoder_threads: int | None = None
+    # Record depth maps from cameras that support depth (e.g. Intel RealSense with use_depth=True).
+    # Depth is stored under ``depth/`` as MP4 shards (v3 layout), keyed as ``observation.depth.<camera>``.
+    save_depth: bool = False
 
     def stamp_repo_id(self) -> None:
         """Append a date-time tag to ``repo_id`` so each recording session gets a unique name.

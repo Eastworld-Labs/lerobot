@@ -34,6 +34,7 @@ from .utils import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_DATA_FILE_SIZE_IN_MB,
     DEFAULT_DATA_PATH,
+    DEFAULT_DEPTH_PATH,
     DEFAULT_VIDEO_FILE_SIZE_IN_MB,
     DEFAULT_VIDEO_PATH,
     DatasetInfo,
@@ -109,6 +110,7 @@ def create_empty_dataset_info(
     Returns:
         DatasetInfo: A typed dataset information object with initial metadata.
     """
+    has_depth = any(ft.get("dtype") == "depth" for ft in features.values())
     return DatasetInfo(
         codebase_version=codebase_version,
         fps=fps,
@@ -119,6 +121,7 @@ def create_empty_dataset_info(
         video_files_size_in_mb=video_files_size_in_mb or DEFAULT_VIDEO_FILE_SIZE_IN_MB,
         data_path=DEFAULT_DATA_PATH,
         video_path=DEFAULT_VIDEO_PATH if use_videos else None,
+        depth_path=DEFAULT_DEPTH_PATH if has_depth else None,
     )
 
 

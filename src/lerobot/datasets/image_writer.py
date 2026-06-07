@@ -71,6 +71,13 @@ def image_array_to_pil_image(image_array: np.ndarray, range_check: bool = True) 
     return PIL.Image.fromarray(image_array)
 
 
+def write_depth_image(depth: np.ndarray, fpath: Path, compress_level: int = 1) -> None:
+    """Save a depth map as an RGB uint8 PNG (scaled) for video encoding."""
+    from lerobot.utils.depth_recording import depth_to_rgb_uint8
+
+    write_image(depth_to_rgb_uint8(depth), fpath, compress_level=compress_level)
+
+
 def write_image(image: np.ndarray | PIL.Image.Image, fpath: Path, compress_level: int = 1):
     """
     Saves a NumPy array or PIL Image to a file.

@@ -27,7 +27,7 @@ import numpy as np
 
 from lerobot.configs import FeatureType, PolicyFeature
 
-from .constants import ACTION, DEFAULT_FEATURES, OBS_ENV_STATE, OBS_STR
+from .constants import ACTION, DEFAULT_FEATURES, OBS_DEPTH, OBS_ENV_STATE, OBS_STR
 
 
 def _validate_feature_names(features: dict[str, dict]) -> None:
@@ -69,7 +69,16 @@ def hw_to_dataset_features(
         for key, ftype in hw_features.items()
         if ftype is float or (isinstance(ftype, PolicyFeature) and ftype.type != FeatureType.VISUAL)
     }
-    cam_fts = {key: shape for key, shape in hw_features.items() if isinstance(shape, tuple)}
+    cam_fts = {
+        key: shape
+        for key, shape in hw_features.items()
+        if isinstance(shape, tuple) and len(shape) == 3
+    }
+    depth_fts = {
+        key.removesuffix("_depth"): shape
+        for key, shape in hw_features.items()
+        if isinstance(shape, tuple) and len(shape) == 2 and key.endswith("_depth")
+    }
 
     if joint_fts and prefix == ACTION:
         features[prefix] = {
@@ -91,6 +100,17 @@ def hw_to_dataset_features(
             "shape": shape,
             "names": ["height", "width", "channels"],
         }
+
+    if prefix == OBS_STR:
+        for key, shape in depth_fts.items():
+            features[f"{OBS_DEPTH}.{key}"] = {
+                "dtype": "depth",
+                "shape": list(shape),
+                "names": ["height", "width"],
+                "info": {
+                    "video.is_depth_map": True,
+                },
+            }
 
     _validate_feature_names(features)
     return features
@@ -121,6 +141,10 @@ def build_dataset_frame(
             frame[key] = np.array([values[name] for name in ft["names"]], dtype=np.float32)
         elif ft["dtype"] in ["image", "video"]:
             frame[key] = values[key.removeprefix(f"{prefix}.images.")]
+        elif ft["dtype"] == "depth":
+            cam_name = key.removeprefix(f"{OBS_DEPTH}.")
+            hw_key = f"{cam_name}_depth"
+            frame[key] = values[hw_key]
 
     return frame
 

@@ -324,24 +324,86 @@ class RealSenseCamera(Camera):
                 self.capture_width, self.capture_height = actual_width, actual_height
 
     @check_if_not_connected
-    def read_depth(self, timeout_ms: int = 200) -> NDArray[Any]:
-        """
-        Reads a single frame (depth) synchronously from the camera.
+    def read_depth_latest(self, max_age_ms: int = 500) -> NDArray[Any]:
+        """Return the most recent depth frame from the background buffer (non-blocking).
 
-        This is a blocking call. It waits for a coherent set of frames (depth)
-        from the camera hardware via the RealSense pipeline.
-
-        Returns:
-            np.ndarray: The depth map as a NumPy array (height, width)
-                  of type `np.uint16` (raw depth values in millimeters) and rotation.
+        Mirrors :meth:`read_latest` for color frames.
 
         Raises:
-            DeviceNotConnectedError: If the camera is not connected.
-            RuntimeError: If reading frames from the pipeline fails or frames are invalid.
+            RuntimeError: If depth stream is not enabled, thread is not running, or no frame yet.
+            TimeoutError: If the latest depth frame is older than ``max_age_ms``.
+        """
+        if not self.use_depth:
+            raise RuntimeError(
+                f"Failed to capture depth frame '.read_depth_latest()'. Depth stream is not enabled for {self}."
+            )
+
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
+
+        with self.frame_lock:
+            depth_map = self.latest_depth_frame
+            timestamp = self.latest_timestamp
+
+        if depth_map is None or timestamp is None:
+            raise RuntimeError(f"{self} has not captured any depth frames yet.")
+
+        age_ms = (time.perf_counter() - timestamp) * 1e3
+        if age_ms > max_age_ms:
+            raise TimeoutError(
+                f"{self} latest depth frame is too old: {age_ms:.1f} ms (max allowed: {max_age_ms} ms)."
+            )
+
+        return depth_map
+
+    @check_if_not_connected
+    def async_read_depth(self, timeout_ms: float = 200) -> NDArray[Any]:
+        """Wait for the next depth frame event and return it (blocking up to ``timeout_ms``).
+
+        Mirrors :meth:`async_read` for color frames. Color and depth are captured together
+        so they share the same ``new_frame_event``.
+
+        Raises:
+            RuntimeError: If depth stream is not enabled or thread is not running.
+            TimeoutError: If no frame arrives within ``timeout_ms``.
+        """
+        if not self.use_depth:
+            raise RuntimeError(
+                f"Failed to capture depth frame '.async_read_depth()'. Depth stream is not enabled for {self}."
+            )
+
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
+
+        if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
+            raise TimeoutError(
+                f"Timed out waiting for depth frame from {self} after {timeout_ms} ms. "
+                f"Read thread alive: {self.thread.is_alive()}."
+            )
+
+        with self.frame_lock:
+            depth_map = self.latest_depth_frame
+            self.new_frame_event.clear()
+
+        if depth_map is None:
+            raise RuntimeError(f"Internal error: event set but no depth frame available for {self}.")
+
+        return depth_map
+
+    @check_if_not_connected
+    def read_depth(self, timeout_ms: int = 0) -> NDArray[Any]:
+        """Blocking read — waits for a guaranteed fresh depth frame from hardware.
+
+        Mirrors :meth:`read` for color frames: clears the frame event first so the
+        next :meth:`async_read_depth` call always returns a newly captured frame.
+
+        Raises:
+            RuntimeError: If depth stream is not enabled or thread is not running.
+            TimeoutError: If no frame arrives within 10 seconds.
         """
         if timeout_ms:
             logger.warning(
-                f"{self} read() timeout_ms parameter is deprecated and will be removed in future versions."
+                f"{self} read_depth() timeout_ms parameter is deprecated and will be removed in future versions."
             )
 
         if not self.use_depth:
@@ -353,16 +415,7 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"{self} read thread is not running.")
 
         self.new_frame_event.clear()
-
-        _ = self.async_read(timeout_ms=10000)
-
-        with self.frame_lock:
-            depth_map = self.latest_depth_frame
-
-        if depth_map is None:
-            raise RuntimeError("No depth frame available. Ensure camera is streaming.")
-
-        return depth_map
+        return self.async_read_depth(timeout_ms=10000)
 
     def _read_from_hardware(self):
         if self.rs_pipeline is None:
