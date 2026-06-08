@@ -338,9 +338,19 @@ class LeRobotDatasetMetadata:
         return [key for key, ft in self.features.items() if ft["dtype"] == "video"]
 
     @property
+    def depth_keys(self) -> list[str]:
+        """Keys to access depth maps stored as encoded videos under ``depth/``."""
+        return [key for key, ft in self.features.items() if ft["dtype"] == "depth"]
+
+    @property
+    def depth_path(self) -> str | None:
+        """Formattable string for depth video files."""
+        return self.info.depth_path
+
+    @property
     def camera_keys(self) -> list[str]:
         """Keys to access visual modalities (regardless of their storage method)."""
-        return [key for key, ft in self.features.items() if ft["dtype"] in ["video", "image"]]
+        return [key for key, ft in self.features.items() if ft["dtype"] in ["video", "image", "depth"]]
 
     @property
     def has_language_columns(self) -> bool:

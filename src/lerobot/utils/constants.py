@@ -20,6 +20,7 @@ from huggingface_hub.constants import HF_HOME
 OBS_STR = "observation"
 OBS_PREFIX = OBS_STR + "."
 OBS_ENV_STATE = OBS_STR + ".environment_state"
+OBS_DEPTH = OBS_STR + ".depth"
 OBS_STATE = OBS_STR + ".state"
 OBS_IMAGE = OBS_STR + ".image"
 OBS_IMAGES = OBS_IMAGE + "s"
