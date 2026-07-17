@@ -699,7 +699,9 @@ class DamiaoMotorsBus(MotorsBusBase):
             if msg:
                 self._process_response(motor, msg)
             else:
-                logger.warning(f"Packet drop: {motor} (ID: 0x{recv_id:02X}). Using last known state.")
+                logger.warning(
+                    f"Packet drop: {motor} (ID: 0x{recv_id:02X}, bus: {self.port}). Using last known state."
+                )
 
     @check_if_not_connected
     def sync_write(self, data_name: str, values: dict[str, Value]) -> None:
