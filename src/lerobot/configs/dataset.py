@@ -71,8 +71,11 @@ class DatasetRecordConfig:
     # Number of threads per encoder instance. None = auto (codec default).
     # Lower values reduce CPU usage, maps to 'lp' (via svtav1-params) for libsvtav1 and 'threads' for h264/hevc..
     encoder_threads: int | None = None
-    # Record depth maps from cameras that support depth (e.g. Intel RealSense with use_depth=True).
-    # Depth is stored under ``depth/`` as MP4 shards (v3 layout), keyed as ``observation.depth.<camera>``.
+    # Not read by lerobot itself — depth capture/recording is driven purely by each
+    # camera's own ``use_depth`` config (features land under
+    # ``observation.images.<camera>_depth``, alongside the RGB stream). Kept as a
+    # plain field for consumers (e.g. openarm-recorder) that want a single
+    # dataset-level flag to surface in their own UI/config.
     save_depth: bool = False
 
     def stamp_repo_id(self) -> None:

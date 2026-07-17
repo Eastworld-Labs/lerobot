@@ -36,6 +36,15 @@ class BiOpenArmFollower(BimanualMixin, Robot):
     config_class = BiOpenArmFollowerConfig
     name = "bi_openarm_follower"
 
+    # A top-level camera's depth stream is reported as f"{cam}_depth" (see
+    # OpenArmFollower._cameras_ft/get_observation), so membership in
+    # _top_level_cam_keys must be checked against the base camera name.
+    _DEPTH_SUFFIX = "_depth"
+
+    def _is_top_level_key(self, key: str) -> bool:
+        base = key[: -len(self._DEPTH_SUFFIX)] if key.endswith(self._DEPTH_SUFFIX) else key
+        return base in self._top_level_cam_keys
+
     def __init__(self, config: BiOpenArmFollowerConfig):
         super().__init__(config)
         self.config = config
@@ -107,7 +116,7 @@ class BiOpenArmFollower(BimanualMixin, Robot):
     def _cameras_ft(self) -> dict[str, tuple]:
         out: dict[str, tuple] = {}
         for k, v in self.left_arm._cameras_ft.items():
-            out[k if k in self._top_level_cam_keys else f"left_{k}"] = v
+            out[k if self._is_top_level_key(k) else f"left_{k}"] = v
         for k, v in self.right_arm._cameras_ft.items():
             out[f"right_{k}"] = v
         return out
@@ -131,7 +140,7 @@ class BiOpenArmFollower(BimanualMixin, Robot):
 
         # Add "left_" prefix to per-arm keys; keep top-level camera keys unprefixed.
         for key, value in self.left_arm.get_observation().items():
-            obs_dict[key if key in self._top_level_cam_keys else f"left_{key}"] = value
+            obs_dict[key if self._is_top_level_key(key) else f"left_{key}"] = value
 
         # Add "right_" prefix
         for key, value in self.right_arm.get_observation().items():
