@@ -191,6 +191,7 @@ class RealSenseCamera(Camera):
             ) from e
 
         self._configure_capture_settings()
+        self._resolve_depth_scale()
         self._start_read_thread()
 
         # NOTE(Steven/Caroline): Enforcing at least one second of warmup as RS cameras need a bit of time before the first read. If we don't wait, the first read from the warmup will raise.
@@ -418,6 +419,51 @@ class RealSenseCamera(Camera):
 
         return frame
 
+    def _resolve_depth_scale(self) -> None:
+        """Read this device's depth unit and cache the factor that turns raw Z16
+        counts into millimetres.
+
+        The Z16 depth stream carries *counts*, not millimetres — one count is
+        worth ``get_depth_scale()`` metres, and that value is device-specific.
+        Long-range models (D435/D455) use 0.001 m, so treating counts as
+        millimetres happens to be correct there. Close-range models do not: the
+        **D405 uses 0.0001 m**, making its raw counts ten times larger than the
+        millimetre reading. Assuming a fixed unit silently inflates every depth
+        by 10x on those devices, which then also clips against any configured
+        depth range.
+        """
+        self.depth_mm_per_unit = 1.0
+        if not self.use_depth or self.rs_profile is None:
+            return
+        try:
+            sensor = self.rs_profile.get_device().first_depth_sensor()
+            scale_m = float(sensor.get_depth_scale())
+        except Exception as exc:  # noqa: BLE001 - never fail connect over this
+            logger.warning(
+                "%s: could not read depth scale (%s); assuming 1 mm per unit.", self, exc
+            )
+            return
+        if scale_m <= 0:
+            logger.warning("%s: nonsensical depth scale %r; assuming 1 mm per unit.", self, scale_m)
+            return
+
+        self.depth_mm_per_unit = scale_m * 1000.0
+        logger.info(
+            "%s: depth scale %.6f m/unit (%.3f mm/unit).", self, scale_m, self.depth_mm_per_unit
+        )
+
+    def _depth_counts_to_mm(self, depth: NDArray[Any]) -> NDArray[np.uint16]:
+        """Convert raw Z16 counts to millimetres using this device's depth scale.
+
+        Kept as ``uint16`` millimetres so the documented contract of
+        :meth:`read_depth` and everything downstream of it is unchanged.
+        """
+        factor = getattr(self, "depth_mm_per_unit", 1.0)
+        if factor == 1.0:
+            return depth
+        scaled = depth.astype(np.float32) * factor
+        return np.rint(scaled).clip(0, np.iinfo(np.uint16).max).astype(np.uint16)
+
     def _postprocess_image(self, image: NDArray[Any], depth_frame: bool = False) -> NDArray[Any]:
         """
         Applies color conversion, dimension validation, and rotation to a raw color frame.
@@ -488,7 +534,7 @@ class RealSenseCamera(Camera):
 
                 if self.use_depth:
                     depth_frame_raw = frame.get_depth_frame()
-                    depth_frame = np.asanyarray(depth_frame_raw.get_data())
+                    depth_frame = self._depth_counts_to_mm(np.asanyarray(depth_frame_raw.get_data()))
                     processed_depth_frame = self._postprocess_image(depth_frame, depth_frame=True)
                     if processed_depth_frame.ndim == 2:  # (H, W) -> (H, W, 1)
                         processed_depth_frame = processed_depth_frame[..., np.newaxis]
