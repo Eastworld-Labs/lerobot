@@ -21,6 +21,7 @@ in the codebase – including modules that are part of the *minimal* install –
 without triggering the ``lerobot.datasets`` package guard.
 """
 
+from collections.abc import Collection
 from typing import Any
 
 import numpy as np
@@ -45,7 +46,10 @@ def _validate_feature_names(features: dict[str, dict]) -> None:
 
 
 def hw_to_dataset_features(
-    hw_features: dict[str, type | tuple], prefix: str, use_video: bool = True
+    hw_features: dict[str, type | tuple],
+    prefix: str,
+    use_video: bool = True,
+    mono_keys: Collection[str] | None = None,
 ) -> dict[str, dict]:
     """Convert hardware-specific features to a LeRobot dataset feature dictionary.
 
@@ -55,15 +59,26 @@ def hw_to_dataset_features(
     maps via ``info["is_depth_map"] = True``; three-channel cameras ``(H, W, 3)`` are
     treated as RGB.
 
+    Single-channel cameras that are *not* depth — greyscale imagers such as the
+    infrared streams of a stereo depth camera — cannot be told apart from depth by
+    shape alone, so they must be named explicitly in ``mono_keys``. Those are
+    flagged ``info["is_mono"] = True`` and ``info["is_depth_map"] = False``, which
+    routes them to a lossless greyscale encoder instead of the depth quantizer.
+
     Args:
         hw_features (dict): Dictionary mapping feature names to their type (float for
             joints) or shape (tuple for images).
         prefix (str): The prefix to add to the feature keys (e.g., "observation"
             or "action").
         use_video (bool): If True, image features are marked as "video", otherwise "image".
+        mono_keys (Collection[str] | None): Keys of ``hw_features`` that are
+            single-channel but not depth maps. Names are the unprefixed hardware
+            keys, matching those of ``hw_features``. Defaults to ``None`` (no mono
+            features), which leaves the returned dictionary unchanged.
 
     Returns:
-        dict: A LeRobot features dictionary. Depth cameras carry ``info["is_depth_map"] = True``.
+        dict: A LeRobot features dictionary. Depth cameras carry ``info["is_depth_map"] = True``,
+        mono cameras carry ``info["is_mono"] = True``.
     """
     features = {}
     joint_fts = {
@@ -88,14 +103,31 @@ def hw_to_dataset_features(
             "names": list(joint_fts),
         }
 
+    mono_keys = set(mono_keys or ())
+    unknown_mono = mono_keys - set(cam_fts)
+    if unknown_mono:
+        raise ValueError(
+            f"mono_keys {sorted(unknown_mono)} are not camera features. "
+            f"Available camera features: {sorted(cam_fts)}."
+        )
+
     for key, shape in cam_fts.items():
         dtype = "video" if use_video else "image"
         if len(shape) == 3 and shape[2] in (1, 3):
+            is_mono = key in mono_keys
+            if is_mono and shape[2] != 1:
+                raise ValueError(
+                    f"Camera feature '{key}' is listed in mono_keys but has shape {shape}. "
+                    f"Mono features must be single-channel, e.g. (480, 640, 1)."
+                )
+            info = {"is_depth_map": shape[2] == 1 and not is_mono}
+            if is_mono:
+                info["is_mono"] = True
             features[f"{prefix}.images.{key}"] = {
                 "dtype": dtype,
                 "shape": shape,
                 "names": ["height", "width", "channels"],
-                "info": {"is_depth_map": shape[2] == 1},
+                "info": info,
             }
         else:
             raise ValueError(

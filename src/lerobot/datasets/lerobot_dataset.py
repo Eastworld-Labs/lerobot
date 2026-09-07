@@ -24,7 +24,7 @@ import torch.utils
 from huggingface_hub import HfApi, snapshot_download
 from huggingface_hub.errors import RevisionNotFoundError
 
-from lerobot.configs import DEFAULT_DEPTH_UNIT, DepthEncoderConfig, RGBEncoderConfig
+from lerobot.configs import DEFAULT_DEPTH_UNIT, DepthEncoderConfig, MonoEncoderConfig, RGBEncoderConfig
 from lerobot.utils.constants import HF_LEROBOT_HUB_CACHE
 
 from .dataset_metadata import CODEBASE_VERSION, LeRobotDatasetMetadata
@@ -65,6 +65,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         encoder_threads: int | None = None,
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
+        mono_encoder: MonoEncoderConfig | None = None,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -283,12 +284,14 @@ class LeRobotDataset(torch.utils.data.Dataset):
                     depth_encoder,
                     encoder_queue_maxsize,
                     encoder_threads,
+                    mono_encoder,
                 )
             self.writer = DatasetWriter(
                 meta=self.meta,
                 root=self.root,
                 rgb_encoder=rgb_encoder,
                 depth_encoder=depth_encoder,
+                mono_encoder=mono_encoder,
                 encoder_threads=encoder_threads,
                 batch_encoding_size=batch_encoding_size,
                 streaming_encoder=streaming_enc,
@@ -335,11 +338,13 @@ class LeRobotDataset(torch.utils.data.Dataset):
         depth_encoder: DepthEncoderConfig | None,
         encoder_queue_maxsize: int,
         encoder_threads: int | None,
+        mono_encoder: MonoEncoderConfig | None = None,
     ) -> StreamingVideoEncoder:
         return StreamingVideoEncoder(
             fps=fps,
             rgb_encoder=rgb_encoder,
             depth_encoder=depth_encoder,
+            mono_encoder=mono_encoder,
             queue_maxsize=encoder_queue_maxsize,
             encoder_threads=encoder_threads,
         )
@@ -681,6 +686,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         encoder_threads: int | None = None,
         video_files_size_in_mb: int | None = None,
         data_files_size_in_mb: int | None = None,
+        mono_encoder: MonoEncoderConfig | None = None,
     ) -> "LeRobotDataset":
         """Create a new LeRobotDataset from scratch for recording data.
 
@@ -753,13 +759,14 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_enc = None
         if streaming_encoding and len(obj.meta.video_keys) > 0:
             streaming_enc = cls._build_streaming_encoder(
-                fps, rgb_encoder, depth_encoder, encoder_queue_maxsize, encoder_threads
+                fps, rgb_encoder, depth_encoder, encoder_queue_maxsize, encoder_threads, mono_encoder
             )
         obj.writer = DatasetWriter(
             meta=obj.meta,
             root=obj.root,
             rgb_encoder=rgb_encoder,
             depth_encoder=depth_encoder,
+            mono_encoder=mono_encoder,
             encoder_threads=encoder_threads,
             batch_encoding_size=batch_encoding_size,
             streaming_encoder=streaming_enc,
@@ -789,6 +796,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         image_writer_threads: int = 0,
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
+        mono_encoder: MonoEncoderConfig | None = None,
     ) -> "LeRobotDataset":
         """Resume recording on an existing dataset.
 
@@ -862,13 +870,14 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_enc = None
         if streaming_encoding and len(obj.meta.video_keys) > 0:
             streaming_enc = cls._build_streaming_encoder(
-                obj.meta.fps, rgb_encoder, depth_encoder, encoder_queue_maxsize, encoder_threads
+                obj.meta.fps, rgb_encoder, depth_encoder, encoder_queue_maxsize, encoder_threads, mono_encoder
             )
         obj.writer = DatasetWriter(
             meta=obj.meta,
             root=obj.root,
             rgb_encoder=rgb_encoder,
             depth_encoder=depth_encoder,
+            mono_encoder=mono_encoder,
             encoder_threads=encoder_threads,
             batch_encoding_size=batch_encoding_size,
             streaming_encoder=streaming_enc,

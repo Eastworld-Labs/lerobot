@@ -33,10 +33,12 @@ import torch
 
 from lerobot.configs import (
     DepthEncoderConfig,
+    MonoEncoderConfig,
     RGBEncoderConfig,
     VideoEncoderConfig,
     depth_encoder_defaults,
     infer_depth_unit,
+    mono_encoder_defaults,
     rgb_encoder_defaults,
 )
 
@@ -115,6 +117,7 @@ class DatasetWriter:
         batch_encoding_size: int,
         streaming_encoder: StreamingVideoEncoder | None = None,
         initial_frames: int = 0,
+        mono_encoder: MonoEncoderConfig | None = None,
     ):
         """Initialize the writer with metadata, codec, and encoder config.
 
@@ -134,11 +137,15 @@ class DatasetWriter:
             streaming_encoder: Optional pre-built :class:`StreamingVideoEncoder`
                 for real-time encoding. ``None`` disables streaming mode.
             initial_frames: Starting frame count (non-zero when resuming).
+            mono_encoder: Video encoder settings applied to single-channel non-depth
+                cameras such as infrared imagers. When ``None``,
+                :func:`~lerobot.configs.video.mono_encoder_defaults` is used.
         """
         self._meta = meta
         self._root = root
         self._rgb_encoder = rgb_encoder or rgb_encoder_defaults()
         self._depth_encoder = depth_encoder or depth_encoder_defaults()
+        self._mono_encoder = mono_encoder or mono_encoder_defaults()
         self._encoder_threads = encoder_threads
         self._batch_encoding_size = batch_encoding_size
         self._streaming_encoder = streaming_encoder
@@ -161,6 +168,14 @@ class DatasetWriter:
         for key in self._meta.features:
             ep_buffer[key] = current_ep_idx if key == "episode_index" else []
         return ep_buffer
+
+    def _encoder_for(self, video_key: str) -> VideoEncoderConfig:
+        """Pick the encoder bucket for *video_key*: depth, mono, or RGB."""
+        if video_key in self._meta.depth_keys:
+            return self._depth_encoder
+        if video_key in self._meta.mono_keys:
+            return self._mono_encoder
+        return self._rgb_encoder
 
     def _get_image_file_path(self, episode_index: int, image_key: str, frame_index: int) -> Path:
         path_template = DEFAULT_DEPTH_PATH if image_key in self._meta.depth_keys else DEFAULT_IMAGE_PATH
@@ -224,6 +239,7 @@ class DatasetWriter:
             self._streaming_encoder.start_episode(
                 video_keys=list(self._meta.video_keys),
                 depth_video_keys=list(self._meta.depth_keys),
+                mono_video_keys=list(self._meta.mono_keys),
                 temp_dir=self._root,
             )
 
@@ -332,7 +348,7 @@ class DatasetWriter:
                             episode_index,
                             self._root,
                             self._meta.fps,
-                            self._depth_encoder if video_key in self._meta.depth_keys else self._rgb_encoder,
+                            self._encoder_for(video_key),
                             self._encoder_threads,
                         ): video_key
                         for video_key in self._meta.video_keys
@@ -543,12 +559,7 @@ class DatasetWriter:
 
         # Update video info (only needed when first episode is encoded)
         if episode_index == 0:
-            self._meta.update_video_info(
-                video_key,
-                video_encoder=self._depth_encoder
-                if video_key in self._meta.depth_keys
-                else self._rgb_encoder,
-            )
+            self._meta.update_video_info(video_key, video_encoder=self._encoder_for(video_key))
             write_info(self._meta.info, self._meta.root)
 
         metadata = {
@@ -616,13 +627,12 @@ class DatasetWriter:
 
     def _encode_temporary_episode_video(self, video_key: str, episode_index: int) -> Path:
         """Use ffmpeg to convert frames stored as png/tiff into mp4 videos."""
-        is_depth = video_key in self._meta.depth_keys
         return _encode_video_worker(
             video_key,
             episode_index,
             self._root,
             self._meta.fps,
-            self._depth_encoder if is_depth else self._rgb_encoder,
+            self._encoder_for(video_key),
             self._encoder_threads,
         )
 

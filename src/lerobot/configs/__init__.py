@@ -39,11 +39,13 @@ from .video import (
     VALID_VIDEO_CODECS,
     VIDEO_ENCODER_INFO_KEYS,
     DepthEncoderConfig,
+    MonoEncoderConfig,
     RGBEncoderConfig,
     VideoEncoderConfig,
     depth_encoder_defaults,
     encoder_config_from_video_info,
     infer_depth_unit,
+    mono_encoder_defaults,
     rgb_encoder_defaults,
 )
 
@@ -68,9 +70,11 @@ __all__ = [
     "VideoEncoderConfig",
     "RGBEncoderConfig",
     "DepthEncoderConfig",
+    "MonoEncoderConfig",
     # Defaults
     "rgb_encoder_defaults",
     "depth_encoder_defaults",
+    "mono_encoder_defaults",
     # Factories
     "encoder_config_from_video_info",
     "infer_depth_unit",

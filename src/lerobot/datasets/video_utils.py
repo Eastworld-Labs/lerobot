@@ -40,9 +40,11 @@ from PIL import Image
 
 from lerobot.configs import (
     DepthEncoderConfig,
+    MonoEncoderConfig,
     RGBEncoderConfig,
     VideoEncoderConfig,
     depth_encoder_defaults,
+    mono_encoder_defaults,
     rgb_encoder_defaults,
 )
 from lerobot.utils.import_utils import get_safe_default_video_backend
@@ -772,6 +774,7 @@ class _CameraEncoderThread(threading.Thread):
         self.fps = fps
         self.video_encoder = video_encoder
         self.is_depth = isinstance(video_encoder, DepthEncoderConfig)
+        self.is_mono = isinstance(video_encoder, MonoEncoderConfig)
         self.frame_queue = frame_queue
         self.result_queue = result_queue
         self.stop_event = stop_event
@@ -824,7 +827,12 @@ class _CameraEncoderThread(threading.Thread):
                     output_stream.time_base = Fraction(1, self.fps)
 
                 # Encode frame with explicit timestamps
-                if not self.is_depth:
+                if self.is_mono:
+                    # PIL cannot build an image from a (H, W, 1) array, so go straight
+                    # to a single-plane VideoFrame and keep the intensities untouched.
+                    mono = frame_data[..., 0] if frame_data.ndim == 3 else frame_data
+                    video_frame = av.VideoFrame.from_ndarray(mono, format="gray")
+                elif not self.is_depth:
                     pil_img = Image.fromarray(frame_data)
                     video_frame = av.VideoFrame.from_image(pil_img)
                 else:
@@ -897,6 +905,7 @@ class StreamingVideoEncoder:
         depth_encoder: DepthEncoderConfig | None = None,
         queue_maxsize: int = 30,
         encoder_threads: int | None = None,
+        mono_encoder: MonoEncoderConfig | None = None,
     ):
         """
         Args:
@@ -910,10 +919,14 @@ class StreamingVideoEncoder:
                 back-pressure drops frames.
             encoder_threads: Number of encoder threads (global setting).
                 ``None`` lets the codec decide.
+            mono_encoder: Video encoder settings applied to all single-channel
+                non-depth cameras such as infrared imagers. When ``None``,
+                :func:`mono_encoder_defaults` is used.
         """
         self.fps = fps
         self._rgb_encoder = rgb_encoder or rgb_encoder_defaults()
         self._depth_encoder = depth_encoder or depth_encoder_defaults()
+        self._mono_encoder = mono_encoder or mono_encoder_defaults()
         self._encoder_threads = encoder_threads
         self.queue_maxsize = queue_maxsize
 
@@ -927,7 +940,11 @@ class StreamingVideoEncoder:
         self._closed = False
 
     def start_episode(
-        self, video_keys: list[str], temp_dir: Path, depth_video_keys: list[str] | None = None
+        self,
+        video_keys: list[str],
+        temp_dir: Path,
+        depth_video_keys: list[str] | None = None,
+        mono_video_keys: list[str] | None = None,
     ) -> None:
         """Start encoder threads for a new episode.
 
@@ -936,6 +953,9 @@ class StreamingVideoEncoder:
             temp_dir: Base directory for temporary MP4 files
             depth_video_keys: List of video or image feature keys that carry depth maps (e.g.
                 ["observation.images.laptop_depth"]).  Defaults to ``[]`` (no depth keys).
+            mono_video_keys: List of video or image feature keys that carry single-channel
+                non-depth images such as infrared (e.g. ["observation.images.laptop_ir_left"]).
+                Defaults to ``[]`` (no mono keys).
         """
         if self._episode_active:
             self.cancel_episode()
@@ -944,6 +964,8 @@ class StreamingVideoEncoder:
 
         if depth_video_keys is None:
             depth_video_keys = []
+        if mono_video_keys is None:
+            mono_video_keys = []
 
         for video_key in video_keys:
             frame_queue: queue.Queue = queue.Queue(maxsize=self.queue_maxsize)
@@ -953,7 +975,12 @@ class StreamingVideoEncoder:
             temp_video_dir = Path(tempfile.mkdtemp(dir=temp_dir))
             video_path = temp_video_dir / f"{video_key.replace('/', '_')}_streaming.mp4"
 
-            encoder = self._depth_encoder if video_key in depth_video_keys else self._rgb_encoder
+            if video_key in depth_video_keys:
+                encoder = self._depth_encoder
+            elif video_key in mono_video_keys:
+                encoder = self._mono_encoder
+            else:
+                encoder = self._rgb_encoder
             encoder_thread = _CameraEncoderThread(
                 video_path=video_path,
                 fps=self.fps,

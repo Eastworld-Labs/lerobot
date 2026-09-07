@@ -68,6 +68,28 @@ DUMMY_DEPTH_CAMERA_FEATURES = {
     },
 }
 DUMMY_CAMERA_FEATURES_WITH_DEPTH = {**DUMMY_CAMERA_FEATURES, **DUMMY_DEPTH_CAMERA_FEATURES}
+DUMMY_MONO_VIDEO_INFO = {
+    **DUMMY_VIDEO_INFO,
+    "is_depth_map": False,
+    "is_mono": True,
+}
+DUMMY_MONO_CAMERA_FEATURES = {
+    "laptop_ir_left": {
+        "shape": (64, 96, 1),
+        "names": ["height", "width", "channels"],
+        "info": DUMMY_MONO_VIDEO_INFO,
+    },
+    "laptop_ir_right": {
+        "shape": (64, 96, 1),
+        "names": ["height", "width", "channels"],
+        "info": DUMMY_MONO_VIDEO_INFO,
+    },
+}
+DUMMY_CAMERA_FEATURES_WITH_MONO = {**DUMMY_CAMERA_FEATURES, **DUMMY_MONO_CAMERA_FEATURES}
+DUMMY_CAMERA_FEATURES_WITH_DEPTH_AND_MONO = {
+    **DUMMY_CAMERA_FEATURES_WITH_DEPTH,
+    **DUMMY_MONO_CAMERA_FEATURES,
+}
 DUMMY_CHW = (3, 96, 128)
 DUMMY_HWC = (96, 128, 3)
 

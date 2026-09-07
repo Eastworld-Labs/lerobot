@@ -18,7 +18,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .video import DepthEncoderConfig, RGBEncoderConfig, depth_encoder_defaults, rgb_encoder_defaults
+from .video import (
+    DepthEncoderConfig,
+    MonoEncoderConfig,
+    RGBEncoderConfig,
+    depth_encoder_defaults,
+    mono_encoder_defaults,
+    rgb_encoder_defaults,
+)
 
 
 @dataclass
@@ -62,6 +69,8 @@ class DatasetRecordConfig:
     rgb_encoder: RGBEncoderConfig = field(default_factory=rgb_encoder_defaults)
     # Video encoder settings for depth-map MP4s (codec, quality, GOP, etc.). Tuned via CLI nested keys.
     depth_encoder: DepthEncoderConfig = field(default_factory=depth_encoder_defaults)
+    # Video encoder settings for single-channel non-depth MP4s such as infrared. Tuned via CLI nested keys.
+    mono_encoder: MonoEncoderConfig = field(default_factory=mono_encoder_defaults)
     # Enable streaming video encoding: encode frames in real-time during capture instead
     # of writing PNG images first. Makes save_episode() near-instant. More info in the documentation: https://huggingface.co/docs/lerobot/streaming_video_encoding
     streaming_encoding: bool = False

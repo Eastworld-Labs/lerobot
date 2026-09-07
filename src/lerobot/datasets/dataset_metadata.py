@@ -359,6 +359,26 @@ class LeRobotDatasetMetadata:
 
         return [key for key, ft in self.features.items() if _is_depth(ft)]
 
+    @property
+    def mono_keys(self) -> list[str]:
+        """Keys to access single-channel non-depth modalities stored as videos or images.
+
+        A mono key is a feature whose ``info`` dict carries ``"is_mono": True``, such as
+        the infrared imagers of a stereo depth camera. These are greyscale intensities,
+        not distances, so they bypass depth quantization and are stored losslessly.
+        """
+
+        def _is_mono(ft: dict) -> bool:
+            info = ft.get("info") or {}
+            video_info = ft.get("video_info") or {}
+            return (
+                info.get("is_mono", False)
+                or info.get("video.is_mono", False)
+                or video_info.get("video.is_mono", False)
+            )
+
+        return [key for key, ft in self.features.items() if _is_mono(ft)]
+
     def rescale_depth_stats(self, output_unit: str) -> None:
         """Rescale depth feature stats in place from their recorded unit to ``output_unit``.
 

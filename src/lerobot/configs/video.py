@@ -320,22 +320,58 @@ def depth_encoder_defaults() -> DepthEncoderConfig:
     return DepthEncoderConfig()
 
 
+@dataclass
+class MonoEncoderConfig(VideoEncoderConfig):
+    """Encoder configuration for single-channel non-depth streams.
+
+    Intended for greyscale camera images such as the infrared imagers of a
+    stereo depth camera. Unlike :class:`DepthEncoderConfig` these frames are
+    plain 8-bit intensities, not distances, so they must not be quantized:
+    they are stored bit-exact so downstream stereo matching sees the original
+    sensor texture.
+
+    Defaults to HEVC in lossless mode with 8-bit greyscale ``pix_fmt``.
+    """
+
+    vcodec: str = "hevc"  # Video codec name. Defaults to HEVC, which supports lossless 8-bit greyscale.
+    pix_fmt: str = "gray"  # Pixel format. Defaults to 8-bit grayscale.
+    preset: int | str | None = (
+        "ultrafast"  # Lossless output is bit-identical at every preset, so pick the fastest.
+    )
+    extra_options: dict[str, Any] = field(default_factory=lambda: {"x265-params": "lossless=1"})
+
+    _DEFAULT_CHANNELS: ClassVar[int] = 1
+
+
+def mono_encoder_defaults() -> MonoEncoderConfig:
+    """Return a :class:`MonoEncoderConfig` with lossless greyscale defaults."""
+    return MonoEncoderConfig()
+
+
 def encoder_config_from_video_info(video_info: dict | None) -> VideoEncoderConfig:
     """Build the appropriate encoder config from a feature's ``info`` block.
 
     Dispatches to :class:`DepthEncoderConfig` when the dict marks the feature
-    as a depth map and to :class:`RGBEncoderConfig`
-    otherwise.
+    as a depth map, to :class:`MonoEncoderConfig` when it marks the feature as
+    single-channel non-depth, and to :class:`RGBEncoderConfig` otherwise.
 
     Args:
         video_info: A feature's ``info`` dict as persisted in ``info.json``,
             or ``None`` (treated as an empty dict).
 
     Returns:
-        A :class:`DepthEncoderConfig` for depth features, otherwise a
+        A :class:`DepthEncoderConfig` for depth features, a
+        :class:`MonoEncoderConfig` for mono features, otherwise a
         :class:`RGBEncoderConfig`.
     """
     video_info = video_info or {}
     is_depth = bool(video_info.get("is_depth_map") or video_info.get("video.is_depth_map"))
-    cls: type[VideoEncoderConfig] = DepthEncoderConfig if is_depth else RGBEncoderConfig
+    is_mono = bool(video_info.get("is_mono") or video_info.get("video.is_mono"))
+    cls: type[VideoEncoderConfig]
+    if is_depth:
+        cls = DepthEncoderConfig
+    elif is_mono:
+        cls = MonoEncoderConfig
+    else:
+        cls = RGBEncoderConfig
     return cls.from_video_info(video_info)
