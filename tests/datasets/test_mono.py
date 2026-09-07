@@ -19,6 +19,7 @@ pytest.importorskip("av", reason="av is required (install lerobot[dataset])")
 
 import av
 import numpy as np
+import torch
 
 from lerobot.configs import DepthEncoderConfig, MonoEncoderConfig, RGBEncoderConfig
 from lerobot.configs.video import encoder_config_from_video_info, mono_encoder_defaults
@@ -214,6 +215,47 @@ class TestMonoLossless:
         for original, roundtripped in zip(sent, decoded, strict=True):
             assert np.array_equal(original[..., 0], roundtripped)
 
+    def test_reader_returns_one_channel_matching_declared_shape(self, tmp_path, features_factory):
+        """The reader must not upconvert a grey plane to RGB.
+
+        Decoding mono as rgb24 yields three identical channels: the declared
+        ``(H, W, 1)`` then disagrees with the ``(3, H, W)`` tensor, and every frame
+        costs three times the memory for no extra information.
+        """
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        mono_features = {
+            MONO_KEY: {
+                "shape": (64, 96, 1),
+                "names": ["height", "width", "channels"],
+                "info": {"is_depth_map": False, "is_mono": True},
+            }
+        }
+        root = tmp_path / "ds"
+        dataset = LeRobotDataset.create(
+            repo_id=DUMMY_REPO_ID,
+            fps=DEFAULT_FPS,
+            features=features_factory(motor_features={}, camera_features=mono_features),
+            root=root,
+            use_videos=True,
+            streaming_encoding=True,
+        )
+        rng = np.random.default_rng(0)
+        sent = [rng.integers(0, 256, (64, 96, 1), dtype=np.uint8) for _ in range(6)]
+        for frame in sent:
+            dataset.add_frame({"task": "test", MONO_KEY: frame})
+        dataset.save_episode()
+        dataset.finalize()
+
+        reloaded = LeRobotDataset(repo_id=DUMMY_REPO_ID, root=root)
+        assert MONO_KEY in reloaded.meta.mono_keys
+        frame = reloaded[0][MONO_KEY]
+        assert tuple(frame.shape) == (1, 64, 96)
+        # Intensities survive the round-trip, scaled to [0, 1] like RGB.
+        assert float(frame.min()) >= 0.0 and float(frame.max()) <= 1.0
+        recovered = (frame[0].numpy() * 255).round().astype(np.uint8)
+        assert np.array_equal(recovered, sent[0][..., 0])
+
     def test_defaults_are_bit_exact(self, tmp_path):
         cfg = mono_encoder_defaults()
         assert cfg.pix_fmt == "gray"
@@ -237,3 +279,38 @@ class TestMonoLossless:
         assert len(decoded) == n
         for original, roundtripped in zip(frames, decoded, strict=True):
             assert np.array_equal(original, roundtripped)
+
+
+# ── 6. Transforms ────────────────────────────────────────────────────
+
+
+class TestMonoSkipsImageTransforms:
+    """Mono is excluded from image transforms, like depth.
+
+    Transforms are sampled per camera key, so the two imagers of a stereo pair
+    would each get a different random affine. That destroys the epipolar geometry
+    the pair exists to provide.
+    """
+
+    def test_transforms_leave_mono_untouched(self, tmp_path, features_factory):
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        features = features_factory(camera_features=DUMMY_CAMERA_FEATURES_WITH_DEPTH_AND_MONO)
+        root = tmp_path / "ds"
+        dataset = LeRobotDataset.create(
+            repo_id=DUMMY_REPO_ID,
+            fps=DEFAULT_FPS,
+            features=features,
+            root=root,
+            use_videos=True,
+            streaming_encoding=True,
+        )
+        add_frames(dataset, num_frames=6)
+        dataset.save_episode()
+        dataset.finalize()
+
+        plain = LeRobotDataset(repo_id=DUMMY_REPO_ID, root=root)
+        # A transform that would visibly change anything it touches.
+        transformed = LeRobotDataset(repo_id=DUMMY_REPO_ID, root=root, image_transforms=lambda x: x * 0.0)
+        assert torch.equal(plain[0][MONO_KEY], transformed[0][MONO_KEY]), "mono must be untouched"
+        assert not torch.equal(plain[0][RGB_KEY], transformed[0][RGB_KEY]), "rgb must be transformed"

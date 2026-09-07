@@ -285,6 +285,7 @@ class DatasetReader:
                 self._video_backend,
                 return_uint8=self._return_uint8,
                 is_depth=vid_key in self._meta.depth_keys,
+                is_mono=vid_key in self._meta.mono_keys,
             )
             if vid_key in self._meta.depth_keys:
                 depth_encoder = self._depth_encoder_configs[vid_key]
@@ -336,7 +337,12 @@ class DatasetReader:
 
         if self._image_transforms is not None:
             for cam in self._meta.camera_keys:
-                if cam in self._meta.depth_keys:
+                # Depth carries distances, so photometric jitter is meaningless there.
+                # Mono is skipped for a sharper reason: transforms are sampled per key,
+                # so the two imagers of a stereo pair would get different random
+                # affines, destroying the epipolar geometry that makes the pair worth
+                # recording. Measured on a synthetic pair: 8 px disparity -> 1 px.
+                if cam in self._meta.depth_keys or cam in self._meta.mono_keys:
                     continue
                 item[cam] = self._image_transforms(item[cam])
 

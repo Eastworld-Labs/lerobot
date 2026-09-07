@@ -62,6 +62,7 @@ def decode_video_frames(
     backend: str | None = None,
     return_uint8: bool = False,
     is_depth: bool = False,
+    is_mono: bool = False,
 ) -> torch.Tensor:
     """
     Decodes video frames using the specified backend.
@@ -76,9 +77,13 @@ def decode_video_frames(
         return_uint8 (bool): For RGB videos, if True return raw uint8 frames without float32 normalization.
             This reduces memory for DataLoader IPC; normalization can be done on GPU afterward.
         is_depth (bool): Set to True if the video is a depth map (1 channel, uint12).
+        is_mono (bool): Set to True if the video is single-channel non-depth (1 channel, uint8),
+            such as an infrared imager. Unlike depth these are intensities, so they keep the
+            same [0,1] normalization as RGB.
 
     Returns:
-        torch.Tensor: Decoded frames (RGB: float32 in [0,1] by default, or uint8 if return_uint8=True, Depth: uint12).
+        torch.Tensor: Decoded frames (RGB: float32 in [0,1] by default, or uint8 if return_uint8=True,
+        Depth: uint12, Mono: float32 in [0,1] by default, 1 channel).
 
     Currently supports torchcodec on cpu and pyav.
     """
@@ -89,18 +94,36 @@ def decode_video_frames(
             video_path, timestamps, tolerance_s, return_uint8=False, is_depth=True
         )
 
+    if backend != "pyav" and is_mono:
+        # torchcodec always yields RGB, which would silently triple a single grey
+        # plane. Mono keeps the RGB normalization, so return_uint8 passes through.
+        logger.debug("Decoding mono video is only supported with the 'pyav' backend, falling back to pyav.")
+        return decode_video_frames_pyav(
+            video_path, timestamps, tolerance_s, return_uint8=return_uint8, is_mono=True
+        )
+
     if backend is None:
         backend = get_safe_default_video_backend()
     if backend == "torchcodec":
         return decode_video_frames_torchcodec(video_path, timestamps, tolerance_s, return_uint8=return_uint8)
     elif backend == "pyav":
         return decode_video_frames_pyav(
-            video_path, timestamps, tolerance_s, return_uint8=return_uint8, is_depth=is_depth
+            video_path,
+            timestamps,
+            tolerance_s,
+            return_uint8=return_uint8,
+            is_depth=is_depth,
+            is_mono=is_mono,
         )
     elif backend == "video_reader":
         logger.warning("backend='video_reader' is deprecated and now aliases to 'pyav'.")
         return decode_video_frames_pyav(
-            video_path, timestamps, tolerance_s, return_uint8=return_uint8, is_depth=is_depth
+            video_path,
+            timestamps,
+            tolerance_s,
+            return_uint8=return_uint8,
+            is_depth=is_depth,
+            is_mono=is_mono,
         )
     else:
         raise ValueError(f"Unsupported video backend: {backend}")
@@ -113,6 +136,7 @@ def decode_video_frames_pyav(
     log_loaded_timestamps: bool = False,
     return_uint8: bool = False,
     is_depth: bool = False,
+    is_mono: bool = False,
 ) -> torch.Tensor:
     """Loads frames associated to the requested timestamps of a video using PyAV.
 
@@ -134,6 +158,9 @@ def decode_video_frames_pyav(
         return_uint8: For RGB videos, if True return raw uint8 frames (C, H, W).
             Otherwise, return float32 in [0, 1] range.
         is_depth: Set to True if the video is a depth map (1 channel, uint12).
+        is_mono: Set to True if the video is single-channel non-depth (1 channel, uint8),
+            such as an infrared imager. Decoded as a single grey plane rather than
+            upconverted to RGB, so the tensor matches the feature's declared shape.
 
     Returns:
         torch.Tensor of shape (len(timestamps), C, H, W).
@@ -171,6 +198,9 @@ def decode_video_frames_pyav(
                 logger.info(f"frame loaded at timestamp={current_ts:.4f}")
             if is_depth:
                 arr = frame.to_ndarray(format="gray12le")  # (H, W) uint12
+                loaded_frames.append(torch.from_numpy(arr).unsqueeze(0).contiguous())
+            elif is_mono:
+                arr = frame.to_ndarray(format="gray")  # (H, W) uint8
                 loaded_frames.append(torch.from_numpy(arr).unsqueeze(0).contiguous())
             else:
                 arr = frame.to_ndarray(format="rgb24")  # (H, W, 3)
