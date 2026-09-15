@@ -526,6 +526,11 @@ class DamiaoMotorsBus(MotorsBusBase):
         for recv_id, motor_name in recv_id_to_motor.items():
             if msg := responses.get(recv_id):
                 self._process_response(motor_name, msg)
+            else:
+                logger.warning(
+                    f"Command packet drop: {motor_name} (recv ID: 0x{recv_id:02X}, bus: {self.port}). "
+                    "Motor did not confirm the command."
+                )
 
     def _float_to_uint(self, x: float, x_min: float, x_max: float, bits: int) -> int:
         """Convert float to unsigned integer for CAN transmission."""
